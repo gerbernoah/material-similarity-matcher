@@ -1,0 +1,32 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "material-similarity-matcher",
+	"main": "src/index.ts",
+	"workers_dev": false,
+	"preview_urls": false,
+	"compatibility_date": "2025-11-06",
+	"observability": {
+		"enabled": true
+	},
+	"kv_namespaces": [
+		{
+			"binding": "DATA_KV",
+			"id": "51d6ee67e02949c4825e30e67a71a842",
+			"remote": true
+		}
+	],
+	"vectorize": [
+		{
+			"binding": "VECTORIZE",
+			"index_name": "material-similarity-matcher",
+			"remote": true
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	}
+}
