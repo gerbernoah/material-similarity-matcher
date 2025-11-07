@@ -1,6 +1,6 @@
 import type { ZodSafeParseError } from "zod";
 import type { Service } from "..";
-import { authenticateToken } from "../auth";
+import { ACCOUNT_KV_PREFIX, type AccountKV, authenticateToken } from "../auth";
 import {
 	addMaterialsRequestSchema,
 	retrieveSimilarMaterialsRequestSchema,
@@ -41,7 +41,12 @@ export const service: Service = {
 			return authContext;
 		}
 
-		if (!authContext.access) {
+		const author: AccountKV | null = await env.DATA_KV.get(
+			`${ACCOUNT_KV_PREFIX}/${encodeURIComponent(authContext.username)}`,
+			"json",
+		);
+
+		if (!author || !author.access) {
 			return new Response("Access denied", { status: 403 });
 		}
 

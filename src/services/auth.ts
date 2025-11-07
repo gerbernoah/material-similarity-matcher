@@ -23,8 +23,6 @@ export type JWTPayload = {
 	iat: number;
 	jti: string;
 	username: string;
-	access: boolean;
-	admin: boolean;
 };
 
 export const service: Service = {
@@ -52,7 +50,7 @@ export const service: Service = {
 					return new Response("User already exists", { status: 400 });
 
 				const user: AccountKV = {
-					username: encodedUsername,
+					username,
 					password: await hash(password),
 					access: false,
 					admin: false,
@@ -80,9 +78,7 @@ export const service: Service = {
 				const payload: JWTPayload = {
 					iat: Date.now(),
 					jti: crypto.randomUUID(),
-					username,
-					access: user.access,
-					admin: user.admin,
+					username: username,
 				};
 				const token = await signJWT(payload, env.JWT_SECRET);
 

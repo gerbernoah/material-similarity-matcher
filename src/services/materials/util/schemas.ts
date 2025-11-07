@@ -22,8 +22,8 @@ export const materialSchema = z.object({
 	ebkp: ebkpCodeSchema,
 	name: z.string(),
 	description: z.string(),
-	price: z.number().positive(),
-	quality: z.number().positive().max(1),
+	price: z.number().min(0),
+	quality: z.number().min(0).max(1),
 	size: sizeSchema,
 	location: locationSchema,
 });
