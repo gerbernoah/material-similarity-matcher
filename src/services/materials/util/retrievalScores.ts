@@ -20,21 +20,40 @@ export function combinedScore(
 	return weightedScoreSum / totalWeight;
 }
 
+/**
+ * Score based on how close match is to expected.
+ * Uses monotonic transformation: score = 1 / (1 + r) where r = |expected - match| / expected
+ * Returns 1 when match === expected, asymptotically approaches 0 as difference increases.
+ */
 export function closerIsBetterScore(
 	expected?: number,
 	match?: number,
 ): number | undefined {
 	if (expected === undefined || match === undefined) return undefined;
+	if (expected === 0 && match === 0) return 1;
+	if (expected === 0) return 1 / (1 + Math.abs(match));
 
-	return Math.max(0, 1 - Math.abs(expected - match) / expected);
+	const r = Math.abs(expected - match) / expected;
+	return 1 / (1 + r);
 }
 
+/**
+ * Score where lower match values are better (e.g., price).
+ * Uses monotonic transformation: score = 1 / (1 + r) where r = max(0, (match - expected) / expected)
+ * Returns 1 when match <= expected, asymptotically approaches 0 as match exceeds expected.
+ */
 export function lowerIsBetterScore(
 	expected?: number,
 	match?: number,
 ): number | undefined {
 	if (expected === undefined || match === undefined) return undefined;
-	return expected / match;
+	if (match <= 0) return 1; // match is 0 or negative, best possible
+	if (expected <= 0) return 1 / (1 + match); // we want 0, penalize based on match
+
+	// When match <= expected, score = 1 (perfect)
+	// When match > expected, score decreases smoothly
+	const r = Math.max(0, (match - expected) / expected);
+	return 1 / (1 + r);
 }
 
 export function sizeScore(expected?: Size, match?: Size): number | undefined {
@@ -49,6 +68,11 @@ export function sizeScore(expected?: Size, match?: Size): number | undefined {
 	]);
 }
 
+/**
+ * Score based on geographical distance between two locations.
+ * Uses monotonic transformation: score = 1 / (1 + d/k) where d is distance in meters.
+ * k controls the decay rate (default 10km = 10000m means score = 0.5 at 10km distance).
+ */
 export function distance(
 	expected?: Location,
 	match?: Location,
@@ -74,6 +98,7 @@ export function distance(
 
 	const d = R * c; // in metres
 
-	const maxDistance = 100000;
-	return 1 - Math.min(d, maxDistance) / maxDistance;
+	// k = decay constant (distance at which score = 0.5)
+	const k = 10000; // 10km
+	return 1 / (1 + d / k);
 }
