@@ -1,33 +1,42 @@
 import type { MaterialWithoutId } from "./types";
 
-function materialToEmbeddingText(material: MaterialWithoutId): string {
-	const { ebkp, name, description } = material;
+/**
+ * Represents the embeddings for different textual fields of a material.
+ * Each field has its own embedding vector for weighted similarity scoring.
+ */
+export type MaterialEmbeddings = {
+	ebkp: number[];
+	name: number[];
+	desc: number[];
+};
 
-	const lines: string[] = ["Material:"];
+function materialToEbkpText(material: MaterialWithoutId): string {
+	const { ebkp } = material;
+	const parts: string[] = [];
 
-	const add = (label: string, value?: string | number | null) => {
-		if (value !== undefined && value !== null && value !== "") {
-			lines.push(`- ${label}: ${value}`);
-		}
-	};
+	if (ebkp?.type) parts.push(`Type: ${ebkp.type}`);
+	if (ebkp?.categoryCode) parts.push(`Category: ${ebkp.categoryCode}`);
+	if (ebkp?.subCategoryCode) parts.push(`Subcategory: ${ebkp.subCategoryCode}`);
 
-	add("Type", ebkp?.type);
-	add("Category", ebkp?.categoryCode);
-	add("Subcategory", ebkp?.subCategoryCode);
-	add("Name", name);
-	add("Description", description);
-
-	return lines.join("\n");
+	return parts.length > 0 ? parts.join("\n") : "No classification";
 }
 
-export async function materialsToEmbedding(
+function materialToNameText(material: MaterialWithoutId): string {
+	return material.name || "Unnamed material";
+}
+
+function materialToDescriptionText(material: MaterialWithoutId): string {
+	return material.description || "No description";
+}
+
+async function generateEmbeddings(
 	env: Env,
-	materials: MaterialWithoutId[],
+	texts: string[],
 ): Promise<number[][]> {
 	const embeddingResponse = await env.AI.run(
 		"@cf/baai/bge-base-en-v1.5",
 		{
-			text: materials.map((material) => materialToEmbeddingText(material)),
+			text: texts,
 			pooling: "cls",
 		},
 		{
@@ -42,4 +51,33 @@ export async function materialsToEmbedding(
 	}
 
 	return embeddingResponse.data;
+}
+
+/**
+ * Generate separate embeddings for each textual field of materials.
+ * Returns an array of MaterialEmbeddings, one per input material.
+ */
+export async function materialsToFieldEmbeddings(
+	env: Env,
+	materials: MaterialWithoutId[],
+): Promise<MaterialEmbeddings[]> {
+	// Prepare texts for each field
+	const ebkpTexts = materials.map(materialToEbkpText);
+	const nameTexts = materials.map(materialToNameText);
+	const descriptionTexts = materials.map(materialToDescriptionText);
+
+	// Generate all embeddings in parallel
+	const [ebkpEmbeddings, nameEmbeddings, descriptionEmbeddings] =
+		await Promise.all([
+			generateEmbeddings(env, ebkpTexts),
+			generateEmbeddings(env, nameTexts),
+			generateEmbeddings(env, descriptionTexts),
+		]);
+
+	// Combine into per-material embeddings
+	return materials.map((_, index) => ({
+		ebkp: ebkpEmbeddings[index],
+		name: nameEmbeddings[index],
+		desc: descriptionEmbeddings[index],
+	}));
 }

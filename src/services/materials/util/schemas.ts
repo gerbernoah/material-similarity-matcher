@@ -39,8 +39,14 @@ export const retrieveSimilarMaterialsRequestSchema = z.object({
 	topK: z.number().min(1).max(10).default(5),
 });
 
+export const textualWeightsSchema = z.object({
+	w_ebkp: z.number().min(0).max(1),
+	w_name: z.number().min(0).max(1),
+	w_desc: z.number().min(0).max(1),
+});
+
 export const weightsSchema = z.object({
-	w_alpha: z.number().min(0).max(1),
+	w_textual: z.number().min(0).max(1),
 	w_price: z.number().min(0).max(1),
 	w_quality: z.number().min(0).max(1),
 	w_position: z.number().min(0).max(1),

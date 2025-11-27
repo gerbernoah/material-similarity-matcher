@@ -6,6 +6,7 @@ import type {
 	materialWithoutIdSchema,
 	retrieveSimilarMaterialsRequestSchema,
 	sizeSchema,
+	textualWeightsSchema,
 	weightsSchema,
 } from "./schemas";
 
@@ -15,6 +16,7 @@ export type Material = z.infer<typeof materialSchema>;
 export type MaterialWithoutId = z.infer<typeof materialWithoutIdSchema>;
 
 export type Weights = z.infer<typeof weightsSchema>;
+export type TextualWeights = z.infer<typeof textualWeightsSchema>;
 
 export type MetaData = {
 	quality: number;

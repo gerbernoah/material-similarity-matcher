@@ -37,10 +37,10 @@ export function lowerIsBetterScore(
 	return expected / match;
 }
 
-export function sizeScore(expected: Size, match: Size): number | undefined {
-	const widthScore = closerIsBetterScore(expected.width, match.width);
-	const heightScore = closerIsBetterScore(expected.height, match.height);
-	const depthScore = closerIsBetterScore(expected.depth, match.depth);
+export function sizeScore(expected?: Size, match?: Size): number | undefined {
+	const widthScore = closerIsBetterScore(expected?.width, match?.width);
+	const heightScore = closerIsBetterScore(expected?.height, match?.height);
+	const depthScore = closerIsBetterScore(expected?.depth, match?.depth);
 
 	return combinedScore([
 		{ score: widthScore, weight: 1 },
@@ -50,14 +50,14 @@ export function sizeScore(expected: Size, match: Size): number | undefined {
 }
 
 export function distance(
-	expected: Location,
-	match: Location,
+	expected?: Location,
+	match?: Location,
 ): number | undefined {
 	if (
-		!expected.latitude ||
-		!expected.longitude ||
-		!match.latitude ||
-		!match.longitude
+		!expected?.latitude ||
+		!expected?.longitude ||
+		!match?.latitude ||
+		!match?.longitude
 	)
 		return undefined;
 

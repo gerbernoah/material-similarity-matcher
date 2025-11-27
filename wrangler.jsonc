@@ -21,8 +21,18 @@
 	],
 	"vectorize": [
 		{
-			"binding": "VECTORIZE",
-			"index_name": "material-similarity-matcher",
+			"binding": "VECTORIZE_EBKP",
+			"index_name": "material-matcher-ebkp",
+			"remote": true
+		},
+		{
+			"binding": "VECTORIZE_NAME",
+			"index_name": "material-matcher-name",
+			"remote": true
+		},
+		{
+			"binding": "VECTORIZE_DESC",
+			"index_name": "material-matcher-desc",
 			"remote": true
 		}
 	],
