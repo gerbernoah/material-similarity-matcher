@@ -9,22 +9,17 @@ import type {
 	Material,
 	MaterialWithoutId,
 	MetaData,
-	TextualWeights,
 	Weights,
 } from "./util/types";
 
 const weights: Weights = {
-	w_textual: 0.5,
+	w_ebkp: 0.3,
+	w_name: 0.5,
+	w_desc: 0.2,
 	w_price: 0.2,
 	w_quality: 0.1,
 	w_position: 0.1,
 	w_size: 0.1,
-};
-
-const textualWeights: TextualWeights = {
-	w_ebkp: 0.3,
-	w_name: 0.5,
-	w_desc: 0.2,
 };
 
 type RetrievalMatch = {
@@ -34,23 +29,7 @@ type RetrievalMatch = {
 export type RetrievalResult = {
 	matches: RetrievalMatch[];
 	weights: Weights;
-	textualWeights: TextualWeights;
 };
-
-/**
- * Calculates the combined textual similarity score from multiple vector index queries.
- */
-function calculateTextualScore(
-	ebkpScore: number,
-	nameScore: number,
-	descScore: number,
-): number {
-	return combinedScore([
-		{ score: ebkpScore, weight: textualWeights.w_ebkp },
-		{ score: nameScore, weight: textualWeights.w_name },
-		{ score: descScore, weight: textualWeights.w_desc },
-	]);
-}
 
 export async function retrieveSimilarMaterials(
 	env: Env,
@@ -120,25 +99,20 @@ export async function retrieveSimilarMaterials(
 		}
 	}
 
-	// Calculate combined scores for all materials
 	const queryMatches: RetrievalMatch[] = [];
 
 	for (const [materialId, scores] of scoreMap) {
-		const s_textual = calculateTextualScore(
-			scores.ebkpScore,
-			scores.nameScore,
-			scores.descScore,
-		);
-
 		const metadata = metadataMap.get(materialId);
 
 		const s_price = lowerIsBetterScore(material?.price, metadata?.price);
-		const s_quality = lowerIsBetterScore(material?.quality, metadata?.quality);
+		const s_quality = lowerIsBetterScore(metadata?.quality, material?.quality);
 		const s_position = distance(material?.location, metadata?.location);
 		const s_size = sizeScore(material?.size, metadata?.size);
 
 		const s_combined = combinedScore([
-			{ score: s_textual, weight: weights.w_textual },
+			{ score: scores.ebkpScore, weight: weights.w_ebkp },
+			{ score: scores.nameScore, weight: weights.w_name },
+			{ score: scores.descScore, weight: weights.w_desc },
 			{ score: s_price, weight: weights.w_price },
 			{ score: s_quality, weight: weights.w_quality },
 			{ score: s_position, weight: weights.w_position },
@@ -158,7 +132,6 @@ export async function retrieveSimilarMaterials(
 	return {
 		matches: topMatches,
 		weights,
-		textualWeights,
 	};
 }
 

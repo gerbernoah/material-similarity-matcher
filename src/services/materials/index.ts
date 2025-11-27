@@ -8,6 +8,7 @@ import {
 import type {
 	AddMaterialsRequest,
 	Material,
+	MaterialWithScore,
 	RetrieveSimilarMaterialsRequest,
 } from "./util/types";
 import {
@@ -103,16 +104,20 @@ export const service: Service = {
 					parsedPayload.data.material,
 				);
 
-				const materialsPromise: Promise<Material | null>[] = [];
-				retrievalResult.matches.forEach((match) => {
-					materialsPromise.push(
-						env.DATA_KV.get(`${MATERIALS_KV_PREFIX}/${match.materialId}`, {
-							type: "json",
-						}),
+				const materialsWithScores: (MaterialWithScore | null)[] =
+					await Promise.all(
+						retrievalResult.matches.map(
+							async (match): Promise<MaterialWithScore | null> => {
+								const material = await env.DATA_KV.get<Material>(
+									`${MATERIALS_KV_PREFIX}/${match.materialId}`,
+									{ type: "json" },
+								);
+								return material ? { ...material, score: match.score } : null;
+							},
+						),
 					);
-				});
 
-				const materials = (await Promise.all(materialsPromise)).filter(
+				const materials: MaterialWithScore[] = materialsWithScores.filter(
 					(material) => material !== null,
 				);
 
@@ -120,7 +125,10 @@ export const service: Service = {
 					{
 						error: false,
 						message: "Retrieval Successful",
-						data: materials,
+						data: {
+							materials,
+							weights: retrievalResult.weights,
+						},
 					},
 					{ status: 200 },
 				);

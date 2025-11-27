@@ -30,6 +30,10 @@ export const materialSchema = z.object({
 
 export const materialWithoutIdSchema = materialSchema.omit({ id: true });
 
+export const materialWithScore = materialSchema.extend({
+	score: z.number(),
+});
+
 export const addMaterialsRequestSchema = z.object({
 	materials: z.array(materialWithoutIdSchema).min(1),
 });
@@ -39,14 +43,10 @@ export const retrieveSimilarMaterialsRequestSchema = z.object({
 	topK: z.number().min(1).max(10).default(5),
 });
 
-export const textualWeightsSchema = z.object({
+export const weightsSchema = z.object({
 	w_ebkp: z.number().min(0).max(1),
 	w_name: z.number().min(0).max(1),
 	w_desc: z.number().min(0).max(1),
-});
-
-export const weightsSchema = z.object({
-	w_textual: z.number().min(0).max(1),
 	w_price: z.number().min(0).max(1),
 	w_quality: z.number().min(0).max(1),
 	w_position: z.number().min(0).max(1),
