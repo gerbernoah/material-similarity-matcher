@@ -2,17 +2,27 @@ import { materialsToFieldEmbeddings } from "./util/embedding";
 import {
 	combinedScore,
 	distance,
+	isWithinRadius,
 	lowerIsBetterScore,
 	sizeScore,
+	timeRangesOverlap,
 } from "./util/retrievalScores";
 import type {
-	Material,
+	AvailableTimeRange,
+	LocationSearch,
+	MaterialWithId,
 	MaterialWithoutId,
 	MetaData,
+	ScoreBreakdown,
+	SearchConstraints,
 	Weights,
 } from "./util/types";
 
-const weights: Weights = {
+// Minimum score required for hard constraints (80%)
+const HARD_CONSTRAINT_MIN_SCORE = 0.8;
+
+// Default weights for scoring
+const DEFAULT_WEIGHTS: Weights = {
 	w_ebkp: 0.3,
 	w_name: 0.5,
 	w_desc: 0.2,
@@ -22,20 +32,84 @@ const weights: Weights = {
 	w_size: 0.1,
 };
 
+/**
+ * Check if material passes all hard constraint filters.
+ * Returns true if all hard constraints have scores >= 80%, false otherwise.
+ * Note: Location and availableTime hard constraints are handled separately via radius/time filters.
+ */
+function passesHardConstraints(
+	scoreBreakdown: ScoreBreakdown,
+	constraints?: SearchConstraints,
+): boolean {
+	if (!constraints) return true;
+
+	if (
+		constraints.ebkp === "hard" &&
+		scoreBreakdown.ebkp < HARD_CONSTRAINT_MIN_SCORE
+	) {
+		return false;
+	}
+	if (
+		constraints.name === "hard" &&
+		scoreBreakdown.name < HARD_CONSTRAINT_MIN_SCORE
+	) {
+		return false;
+	}
+	if (
+		constraints.description === "hard" &&
+		scoreBreakdown.description < HARD_CONSTRAINT_MIN_SCORE
+	) {
+		return false;
+	}
+	if (
+		constraints.price === "hard" &&
+		scoreBreakdown.price < HARD_CONSTRAINT_MIN_SCORE
+	) {
+		return false;
+	}
+	if (
+		constraints.condition === "hard" &&
+		scoreBreakdown.quality < HARD_CONSTRAINT_MIN_SCORE
+	) {
+		return false;
+	}
+	// Note: location "hard" is handled by radius filter, not score threshold
+	if (
+		constraints.dimensions === "hard" &&
+		scoreBreakdown.size < HARD_CONSTRAINT_MIN_SCORE
+	) {
+		return false;
+	}
+
+	return true;
+}
+
 type RetrievalMatch = {
 	materialId: string;
 	score: number;
+	scoreBreakdown: ScoreBreakdown;
 };
+
 export type RetrievalResult = {
 	matches: RetrievalMatch[];
 	weights: Weights;
+};
+
+export type RetrievalOptions = {
+	constraints?: SearchConstraints;
+	location?: LocationSearch;
+	availableTime?: AvailableTimeRange;
 };
 
 export async function retrieveSimilarMaterials(
 	env: Env,
 	topK: number,
 	material: MaterialWithoutId,
+	options?: RetrievalOptions,
 ): Promise<RetrievalResult> {
+	// Use default weights (no more weight multipliers for hard constraints)
+	const weights = DEFAULT_WEIGHTS;
+
 	const queryEmbeddings = await materialsToFieldEmbeddings(env, [material]);
 	const queryEmb = queryEmbeddings[0];
 
@@ -104,11 +178,53 @@ export async function retrieveSimilarMaterials(
 	for (const [materialId, scores] of scoreMap) {
 		const metadata = metadataMap.get(materialId);
 
+		// Apply location filter only if location constraint is "hard"
+		if (options?.location && options?.constraints?.location === "hard") {
+			const withinRadius = isWithinRadius(
+				options.location,
+				metadata?.location,
+				options.location.radiusKm,
+			);
+			if (!withinRadius) continue;
+		}
+
+		// Apply time filter only if availableTime constraint is "hard"
+		if (
+			options?.availableTime &&
+			options?.constraints?.availableTime === "hard"
+		) {
+			const overlaps = timeRangesOverlap(
+				options.availableTime.from,
+				options.availableTime.to,
+				metadata?.availableTime?.from,
+				metadata?.availableTime?.to,
+			);
+			if (!overlaps) continue;
+		}
+
+		// Calculate individual scores
 		const s_price = lowerIsBetterScore(material?.price, metadata?.price);
 		const s_quality = lowerIsBetterScore(metadata?.quality, material?.quality);
 		const s_position = distance(material?.location, metadata?.location);
 		const s_size = sizeScore(material?.size, metadata?.size);
 
+		// Build score breakdown (individual scores before weighting)
+		const scoreBreakdown: ScoreBreakdown = {
+			ebkp: scores.ebkpScore,
+			name: scores.nameScore,
+			description: scores.descScore,
+			price: s_price ?? 0,
+			quality: s_quality ?? 0,
+			position: s_position ?? 0,
+			size: s_size ?? 0,
+		};
+
+		// Filter out materials that don't pass hard constraints (< 80% match)
+		if (!passesHardConstraints(scoreBreakdown, options?.constraints)) {
+			continue;
+		}
+
+		// Calculate combined score using weights
 		const s_combined = combinedScore([
 			{ score: scores.ebkpScore, weight: weights.w_ebkp },
 			{ score: scores.nameScore, weight: weights.w_name },
@@ -122,6 +238,7 @@ export async function retrieveSimilarMaterials(
 		queryMatches.push({
 			materialId,
 			score: s_combined,
+			scoreBreakdown,
 		});
 	}
 
@@ -135,30 +252,38 @@ export async function retrieveSimilarMaterials(
 	};
 }
 
-function buildMetadata(material: Material): MetaData {
-	const width = material.size.width;
-	const height = material.size.height;
-	const depth = material.size.depth;
-
+function buildMetadata(material: MaterialWithId): MetaData {
 	return {
 		quality: material.quality,
 		price: material.price,
-		location: {
-			latitude: material.location.latitude,
-			longitude: material.location.longitude,
-		},
-		size: {
-			...(width && { width }),
-			...(height && { height }),
-			...(depth && { depth }),
-		},
+		...(material.location && {
+			location: {
+				latitude: material.location.latitude,
+				longitude: material.location.longitude,
+			},
+		}),
+		...(material.size && {
+			size: {
+				...(material.size.width && { width: material.size.width }),
+				...(material.size.height && { height: material.size.height }),
+				...(material.size.depth && { depth: material.size.depth }),
+			},
+		}),
+		...(material.availableTime && {
+			availableTime: {
+				...(material.availableTime.from && {
+					from: material.availableTime.from,
+				}),
+				...(material.availableTime.to && { to: material.availableTime.to }),
+			},
+		}),
 	};
 }
 
 function materialToVectorizeVector(
 	id: string,
 	vector: number[],
-	meta?: Material,
+	meta?: MaterialWithId,
 ): VectorizeVector {
 	return {
 		id,
@@ -169,7 +294,7 @@ function materialToVectorizeVector(
 
 export async function addMaterialsToVectorStore(
 	env: Env,
-	materials: Material[],
+	materials: MaterialWithId[],
 ) {
 	const fieldEmbeddings = await materialsToFieldEmbeddings(env, materials);
 

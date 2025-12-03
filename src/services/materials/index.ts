@@ -7,7 +7,7 @@ import {
 } from "./util/schemas";
 import type {
 	AddMaterialsRequest,
-	Material,
+	MaterialWithId,
 	MaterialWithScore,
 	RetrieveSimilarMaterialsRequest,
 } from "./util/types";
@@ -60,10 +60,14 @@ export const service: Service = {
 					return zodErrorToResponse(parsedPayload);
 				}
 
-				const materials: Material[] = parsedPayload.data.materials.map(
-					(materialWithoutId): Material => ({
+				const materials: MaterialWithId[] = parsedPayload.data.materials.map(
+					(materialWithoutId): MaterialWithId => ({
 						...materialWithoutId,
 						id: crypto.randomUUID(),
+						// TODO: Handle image upload to R2
+						// If materialWithoutId.image contains base64 data:
+						// 1. Upload to R2: await env.R2_BUCKET.put(`images/${id}`, imageData)
+						// 2. Store the R2 URL/key in the material
 					}),
 				);
 
@@ -102,17 +106,33 @@ export const service: Service = {
 					env,
 					parsedPayload.data.topK,
 					parsedPayload.data.material,
+					{
+						constraints: parsedPayload.data.constraints,
+						location: parsedPayload.data.location,
+						availableTime: parsedPayload.data.availableTime,
+					},
 				);
 
 				const materialsWithScores: (MaterialWithScore | null)[] =
 					await Promise.all(
 						retrievalResult.matches.map(
 							async (match): Promise<MaterialWithScore | null> => {
-								const material = await env.DATA_KV.get<Material>(
+								const material = await env.DATA_KV.get<MaterialWithId>(
 									`${MATERIALS_KV_PREFIX}/${match.materialId}`,
 									{ type: "json" },
 								);
-								return material ? { ...material, score: match.score } : null;
+								if (!material) return null;
+
+								// TODO: Generate signed URL for image from R2
+								// If material.image contains R2 key:
+								// const imageUrl = await env.R2_BUCKET.createSignedUrl(material.image)
+								// Or use a public URL if bucket is public
+
+								return {
+									...material,
+									score: match.score,
+									scoreBreakdown: match.scoreBreakdown,
+								};
 							},
 						),
 					);
@@ -124,7 +144,7 @@ export const service: Service = {
 				return Response.json(
 					{
 						error: false,
-						message: "Retrieval Successful",
+						message: `Found ${materials.length} similar materials`,
 						data: {
 							materials,
 							weights: retrievalResult.weights,
