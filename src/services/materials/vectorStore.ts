@@ -1,5 +1,6 @@
 import { materialsToFieldEmbeddings } from "./util/embedding";
 import {
+	availabilityScore,
 	combinedScore,
 	distance,
 	isWithinRadius,
@@ -23,14 +24,99 @@ const HARD_CONSTRAINT_MIN_SCORE = 0.8;
 
 // Default weights for scoring
 const DEFAULT_WEIGHTS: Weights = {
-	w_ebkp: 0.3,
-	w_name: 0.5,
+	w_name: 0.2,
 	w_desc: 0.2,
-	w_price: 0.2,
-	w_quality: 0.1,
-	w_position: 0.1,
+	w_price: 0.15,
+	w_quality: 0.15,
+	w_location: 0.1,
+	w_availability: 0.1,
 	w_size: 0.1,
 };
+
+/**
+ * Detect which fields the user actually provided in their search query.
+ * Returns true only if the field has meaningful data (not defaults/empty).
+ */
+function isFieldProvided(material: MaterialWithoutId): {
+	hasName: boolean;
+	hasDescription: boolean;
+	hasPrice: boolean;
+	hasQuality: boolean;
+	hasLocation: boolean;
+	hasAvailability: boolean;
+	hasSize: boolean;
+} {
+	return {
+		hasName: !!material.name && material.name.trim().length > 0,
+		hasDescription:
+			!!material.description && material.description.trim().length > 0,
+		hasPrice:
+			material.price !== undefined &&
+			material.price !== null &&
+			material.price > 0,
+		hasQuality:
+			material.quality !== undefined &&
+			material.quality !== null &&
+			material.quality >= 0.5, // Valid quality is 0.5-1.0, treat < 0.5 as not provided
+		hasLocation:
+			!!material.location &&
+			(material.location.latitude !== 0 || material.location.longitude !== 0) &&
+			// Check if it's a meaningful location (not just default/placeholder)
+			Math.abs(material.location.latitude) > 0.0001 &&
+			Math.abs(material.location.longitude) > 0.0001,
+		hasAvailability:
+			!!material.availableTime &&
+			(!!material.availableTime.from || !!material.availableTime.to),
+		hasSize:
+			!!material.size &&
+			(!!material.size.width ||
+				!!material.size.height ||
+				!!material.size.depth),
+	};
+}
+
+/**
+ * Calculate normalized weights based on which fields were actually provided.
+ * Only active fields get non-zero weights, and they sum to 1.0.
+ */
+function calculateActiveWeights(material: MaterialWithoutId): Weights {
+	const provided = isFieldProvided(material);
+	const baseWeights = { ...DEFAULT_WEIGHTS };
+
+	// Zero out weights for unprovided fields
+	const activeWeights: Weights = {
+		w_name: provided.hasName ? baseWeights.w_name : 0,
+		w_desc: provided.hasDescription ? baseWeights.w_desc : 0,
+		w_price: provided.hasPrice ? baseWeights.w_price : 0,
+		w_quality: provided.hasQuality ? baseWeights.w_quality : 0,
+		w_location: provided.hasLocation ? baseWeights.w_location : 0,
+		w_availability: provided.hasAvailability ? baseWeights.w_availability : 0,
+		w_size: provided.hasSize ? baseWeights.w_size : 0,
+	};
+
+	// Calculate sum of active weights
+	const totalWeight =
+		activeWeights.w_name +
+		activeWeights.w_desc +
+		activeWeights.w_price +
+		activeWeights.w_quality +
+		activeWeights.w_location +
+		activeWeights.w_availability +
+		activeWeights.w_size;
+
+	// Normalize to sum to 1.0 if we have any active fields
+	if (totalWeight > 0) {
+		activeWeights.w_name /= totalWeight;
+		activeWeights.w_desc /= totalWeight;
+		activeWeights.w_price /= totalWeight;
+		activeWeights.w_quality /= totalWeight;
+		activeWeights.w_location /= totalWeight;
+		activeWeights.w_availability /= totalWeight;
+		activeWeights.w_size /= totalWeight;
+	}
+
+	return activeWeights;
+}
 
 /**
  * Check if material passes all hard constraint filters.
@@ -43,12 +129,6 @@ function passesHardConstraints(
 ): boolean {
 	if (!constraints) return true;
 
-	if (
-		constraints.ebkp === "hard" &&
-		scoreBreakdown.ebkp < HARD_CONSTRAINT_MIN_SCORE
-	) {
-		return false;
-	}
 	if (
 		constraints.name === "hard" &&
 		scoreBreakdown.name < HARD_CONSTRAINT_MIN_SCORE
@@ -80,6 +160,7 @@ function passesHardConstraints(
 	) {
 		return false;
 	}
+	// Note: availability "hard" is handled by time overlap filter
 
 	return true;
 }
@@ -107,22 +188,22 @@ export async function retrieveSimilarMaterials(
 	material: MaterialWithoutId,
 	options?: RetrievalOptions,
 ): Promise<RetrievalResult> {
-	// Use default weights (no more weight multipliers for hard constraints)
-	const weights = DEFAULT_WEIGHTS;
+	// Calculate active weights based on which fields user actually provided
+	const weights = calculateActiveWeights(material);
+	const provided = isFieldProvided(material);
 
 	const queryEmbeddings = await materialsToFieldEmbeddings(env, [material]);
 	const queryEmb = queryEmbeddings[0];
 
-	// In production, move metadata to kv or something (for now this is cheaper)
-	const [ebkpResponse, nameResponse, descResponse] = await Promise.all([
-		env.VECTORIZE_EBKP.query(queryEmb.ebkp, { topK, returnMetadata: "all" }),
-		env.VECTORIZE_NAME.query(queryEmb.name, { topK, returnMetadata: "none" }),
+	// Query name and description vectors (metadata stored with name vectors)
+	const [nameResponse, descResponse] = await Promise.all([
+		env.VECTORIZE_NAME.query(queryEmb.name, { topK, returnMetadata: "all" }),
 		env.VECTORIZE_DESC.query(queryEmb.desc, { topK, returnMetadata: "none" }),
 	]);
 
-	// Build metadata map from ebkp response (the only one with metadata)
+	// Build metadata map from name response (stores all metadata)
 	const metadataMap = new Map<string, MetaData>();
-	for (const match of ebkpResponse.matches) {
+	for (const match of nameResponse.matches) {
 		metadataMap.set(match.id, match.metadata as MetaData);
 	}
 
@@ -130,33 +211,17 @@ export async function retrieveSimilarMaterials(
 	const scoreMap = new Map<
 		string,
 		{
-			ebkpScore: number;
 			nameScore: number;
 			descScore: number;
 		}
 	>();
 
-	// Process ebkp matches
-	for (const match of ebkpResponse.matches) {
-		scoreMap.set(match.id, {
-			ebkpScore: match.score,
-			nameScore: 0,
-			descScore: 0,
-		});
-	}
-
 	// Process name matches
 	for (const match of nameResponse.matches) {
-		const existing = scoreMap.get(match.id);
-		if (existing) {
-			existing.nameScore = match.score;
-		} else {
-			scoreMap.set(match.id, {
-				ebkpScore: 0,
-				nameScore: match.score,
-				descScore: 0,
-			});
-		}
+		scoreMap.set(match.id, {
+			nameScore: match.score,
+			descScore: 0,
+		});
 	}
 
 	// Process description matches
@@ -166,7 +231,6 @@ export async function retrieveSimilarMaterials(
 			existing.descScore = match.score;
 		} else {
 			scoreMap.set(match.id, {
-				ebkpScore: 0,
 				nameScore: 0,
 				descScore: match.score,
 			});
@@ -188,10 +252,10 @@ export async function retrieveSimilarMaterials(
 			if (!withinRadius) continue;
 		}
 
-		// Apply time filter only if availableTime constraint is "hard"
+		// Apply time filter only if availability constraint is "hard"
 		if (
 			options?.availableTime &&
-			options?.constraints?.availableTime === "hard"
+			options?.constraints?.availability === "hard"
 		) {
 			const overlaps = timeRangesOverlap(
 				options.availableTime.from,
@@ -202,20 +266,31 @@ export async function retrieveSimilarMaterials(
 			if (!overlaps) continue;
 		}
 
-		// Calculate individual scores
-		const s_price = lowerIsBetterScore(material?.price, metadata?.price);
-		const s_quality = lowerIsBetterScore(metadata?.quality, material?.quality);
-		const s_position = distance(material?.location, metadata?.location);
-		const s_size = sizeScore(material?.size, metadata?.size);
+		// Calculate individual scores ONLY for fields that were provided
+		const s_price = provided.hasPrice
+			? lowerIsBetterScore(material?.price, metadata?.price)
+			: undefined;
+		const s_quality = provided.hasQuality
+			? lowerIsBetterScore(metadata?.quality, material?.quality)
+			: undefined;
+		const s_location = provided.hasLocation
+			? distance(material?.location, metadata?.location)
+			: undefined;
+		const s_availability = provided.hasAvailability
+			? availabilityScore(material?.availableTime, metadata?.availableTime)
+			: undefined;
+		const s_size = provided.hasSize
+			? sizeScore(material?.size, metadata?.size)
+			: undefined;
 
 		// Build score breakdown (individual scores before weighting)
 		const scoreBreakdown: ScoreBreakdown = {
-			ebkp: scores.ebkpScore,
 			name: scores.nameScore,
 			description: scores.descScore,
 			price: s_price ?? 0,
 			quality: s_quality ?? 0,
-			position: s_position ?? 0,
+			location: s_location ?? 0,
+			availability: s_availability ?? 0,
 			size: s_size ?? 0,
 		};
 
@@ -224,16 +299,33 @@ export async function retrieveSimilarMaterials(
 			continue;
 		}
 
-		// Calculate combined score using weights
-		const s_combined = combinedScore([
-			{ score: scores.ebkpScore, weight: weights.w_ebkp },
+		// Calculate combined score using weights - only include provided fields
+		const scoreComponents = [
 			{ score: scores.nameScore, weight: weights.w_name },
 			{ score: scores.descScore, weight: weights.w_desc },
-			{ score: s_price, weight: weights.w_price },
-			{ score: s_quality, weight: weights.w_quality },
-			{ score: s_position, weight: weights.w_position },
-			{ score: s_size, weight: weights.w_size },
-		]);
+		];
+
+		// Only add scores for fields that were actually provided
+		if (provided.hasPrice && s_price !== undefined) {
+			scoreComponents.push({ score: s_price, weight: weights.w_price });
+		}
+		if (provided.hasQuality && s_quality !== undefined) {
+			scoreComponents.push({ score: s_quality, weight: weights.w_quality });
+		}
+		if (provided.hasLocation && s_location !== undefined) {
+			scoreComponents.push({ score: s_location, weight: weights.w_location });
+		}
+		if (provided.hasAvailability && s_availability !== undefined) {
+			scoreComponents.push({
+				score: s_availability,
+				weight: weights.w_availability,
+			});
+		}
+		if (provided.hasSize && s_size !== undefined) {
+			scoreComponents.push({ score: s_size, weight: weights.w_size });
+		}
+
+		const s_combined = combinedScore(scoreComponents);
 
 		queryMatches.push({
 			materialId,
@@ -246,9 +338,52 @@ export async function retrieveSimilarMaterials(
 	queryMatches.sort((a, b) => b.score - a.score);
 	const topMatches = queryMatches.slice(0, topK);
 
+	// Recalculate weights based on which fields actually had scores across all results
+	// This handles cases where user provides a field but no stored materials have that data
+	const hasAnyScore = {
+		name: topMatches.some((m) => m.scoreBreakdown.name > 0),
+		description: topMatches.some((m) => m.scoreBreakdown.description > 0),
+		price: topMatches.some((m) => m.scoreBreakdown.price > 0),
+		quality: topMatches.some((m) => m.scoreBreakdown.quality > 0),
+		location: topMatches.some((m) => m.scoreBreakdown.location > 0),
+		availability: topMatches.some((m) => m.scoreBreakdown.availability > 0),
+		size: topMatches.some((m) => m.scoreBreakdown.size > 0),
+	};
+
+	// Adjust weights: zero out fields that had no scores
+	const adjustedWeights: Weights = {
+		w_name: hasAnyScore.name ? weights.w_name : 0,
+		w_desc: hasAnyScore.description ? weights.w_desc : 0,
+		w_price: hasAnyScore.price ? weights.w_price : 0,
+		w_quality: hasAnyScore.quality ? weights.w_quality : 0,
+		w_location: hasAnyScore.location ? weights.w_location : 0,
+		w_availability: hasAnyScore.availability ? weights.w_availability : 0,
+		w_size: hasAnyScore.size ? weights.w_size : 0,
+	};
+
+	// Renormalize to sum to 1.0
+	const totalAdjustedWeight =
+		adjustedWeights.w_name +
+		adjustedWeights.w_desc +
+		adjustedWeights.w_price +
+		adjustedWeights.w_quality +
+		adjustedWeights.w_location +
+		adjustedWeights.w_availability +
+		adjustedWeights.w_size;
+
+	if (totalAdjustedWeight > 0) {
+		adjustedWeights.w_name /= totalAdjustedWeight;
+		adjustedWeights.w_desc /= totalAdjustedWeight;
+		adjustedWeights.w_price /= totalAdjustedWeight;
+		adjustedWeights.w_quality /= totalAdjustedWeight;
+		adjustedWeights.w_location /= totalAdjustedWeight;
+		adjustedWeights.w_availability /= totalAdjustedWeight;
+		adjustedWeights.w_size /= totalAdjustedWeight;
+	}
+
 	return {
 		matches: topMatches,
-		weights,
+		weights: adjustedWeights,
 	};
 }
 
@@ -304,22 +439,20 @@ export async function addMaterialsToVectorStore(
 
 	fieldEmbeddings.forEach((embeddings, index) => {
 		const material = materials[index];
-		// Only EBKP vectors include metadata to avoid storage duplication
+		// Store EBKP embeddings without metadata (for potential future use)
 		ebkpVectors.push(
-			materialToVectorizeVector(material.id, embeddings.ebkp, material),
+			materialToVectorizeVector(material.id, embeddings.ebkp, undefined),
 		);
+		// Name vectors now include metadata (used for retrieval)
 		nameVectors.push(
-			materialToVectorizeVector(material.id, embeddings.name, undefined),
+			materialToVectorizeVector(material.id, embeddings.name, material),
 		);
 		descVectors.push(
 			materialToVectorizeVector(material.id, embeddings.desc, undefined),
 		);
 	});
 
-	// TODO: Replace env.VECTORIZE with the appropriate bindings once created:
-	// - env.VECTORIZE_EBKP.upsert(ebkpVectors) for ebkp embeddings (with metadata)
-	// - env.VECTORIZE_NAME.upsert(nameVectors) for name embeddings
-	// - env.VECTORIZE_DESC.upsert(descVectors) for description embeddings
+	// Store all embeddings in their respective vector stores
 	await Promise.all([
 		env.VECTORIZE_EBKP.upsert(ebkpVectors),
 		env.VECTORIZE_NAME.upsert(nameVectors),

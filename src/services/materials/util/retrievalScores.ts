@@ -2,12 +2,12 @@ import type { AvailableTime, Location, ScoreBreakdown, Size } from "./types";
 
 // Default score breakdown with all zeros
 export const DEFAULT_SCORE_BREAKDOWN: ScoreBreakdown = {
-	ebkp: 0,
 	name: 0,
 	description: 0,
 	price: 0,
 	quality: 0,
-	position: 0,
+	location: 0,
+	availability: 0,
 	size: 0,
 };
 
@@ -28,7 +28,11 @@ export function combinedScore(
 
 	if (totalWeight === 0) return 0;
 
-	return weightedScoreSum / totalWeight;
+	// If weights are already normalized (sum to ~1.0), don't divide again
+	// Allow small floating point tolerance
+	const isNormalized = Math.abs(totalWeight - 1.0) < 0.0001;
+
+	return isNormalized ? weightedScoreSum : weightedScoreSum / totalWeight;
 }
 
 /**
@@ -179,7 +183,7 @@ export function timeRangesOverlap(
  * Score based on time range overlap.
  * Returns 1 for perfect overlap, decreasing based on how much the ranges don't overlap.
  */
-export function availableTimeScore(
+export function availabilityScore(
 	expected?: AvailableTime,
 	match?: AvailableTime,
 ): number | undefined {

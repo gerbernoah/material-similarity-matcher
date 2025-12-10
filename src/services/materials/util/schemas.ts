@@ -33,13 +33,14 @@ export const availableTimeSchema = z.object({
 export const materialSchema = z.object({
 	id: z.string().optional(),
 	name: z.string(),
-	description: z.string(),
-	price: z.number().min(0),
-	quality: z.number().min(0).max(1), // 0-1 scale
+	description: z.string().optional(), // Now optional, may be auto-generated
+	price: z.number().min(0).optional(), // Now optional
+	quality: z.number().min(0.5).max(1).optional(), // Updated range: 0.5-1.0 only, optional for imports
+	quantity: z.number().positive().optional(), // New field
 	image: z.string().optional(), // URL to material image (R2)
 	size: sizeSchema.optional(),
 	location: locationSchema.optional(),
-	ebkp: ebkpCodeSchema.optional(),
+	ebkp: ebkpCodeSchema.optional(), // Auto-generated, not user input
 	availableTime: availableTimeSchema.optional(),
 });
 
@@ -54,12 +55,12 @@ export const materialWithoutIdSchema = materialSchema.omit({ id: true });
 // ============================================
 
 export const scoreBreakdownSchema = z.object({
-	ebkp: z.number().min(0).max(1),
 	name: z.number().min(0).max(1),
 	description: z.number().min(0).max(1),
 	price: z.number().min(0).max(1),
 	quality: z.number().min(0).max(1),
-	position: z.number().min(0).max(1),
+	location: z.number().min(0).max(1), // Renamed from position
+	availability: z.number().min(0).max(1), // Split from position
 	size: z.number().min(0).max(1),
 });
 
@@ -69,12 +70,12 @@ export const materialWithScore = materialWithIdSchema.extend({
 });
 
 export const weightsSchema = z.object({
-	w_ebkp: z.number().min(0).max(1),
 	w_name: z.number().min(0).max(1),
 	w_desc: z.number().min(0).max(1),
 	w_price: z.number().min(0).max(1),
 	w_quality: z.number().min(0).max(1),
-	w_position: z.number().min(0).max(1),
+	w_location: z.number().min(0).max(1), // Split from w_position
+	w_availability: z.number().min(0).max(1), // Split from w_position
 	w_size: z.number().min(0).max(1),
 });
 
@@ -89,10 +90,9 @@ export const searchConstraintsSchema = z.object({
 	description: constraintTypeSchema.optional().default("soft"),
 	price: constraintTypeSchema.optional().default("soft"),
 	condition: constraintTypeSchema.optional().default("soft"), // maps to quality
-	location: constraintTypeSchema.optional().default("soft"), // maps to position
-	ebkp: constraintTypeSchema.optional().default("soft"),
+	location: constraintTypeSchema.optional().default("soft"),
 	dimensions: constraintTypeSchema.optional().default("soft"), // maps to size
-	availableTime: constraintTypeSchema.optional().default("soft"),
+	availability: constraintTypeSchema.optional().default("soft"), // Renamed from availableTime
 });
 
 export const availableTimeRangeSchema = z.object({

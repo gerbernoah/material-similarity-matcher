@@ -55,8 +55,8 @@ export type LocationSearch = z.infer<typeof locationSearchSchema>;
 // ============================================
 
 export type MetaData = {
-	quality: number;
-	price: number;
+	quality?: number;
+	price?: number;
 	location?: Location;
 	size?: Size;
 	availableTime?: AvailableTime;

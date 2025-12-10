@@ -1,6 +1,8 @@
 import type { ZodSafeParseError } from "zod";
 import type { Service } from "..";
 import { ACCOUNT_KV_PREFIX, type AccountKV, authenticateToken } from "../auth";
+import { generateDescription, generateEBKP } from "./util/aiGeneration";
+import { fileToText, parseInventoryFile } from "./util/fileParser";
 import {
 	addMaterialsRequestSchema,
 	retrieveSimilarMaterialsRequestSchema,
@@ -60,15 +62,32 @@ export const service: Service = {
 					return zodErrorToResponse(parsedPayload);
 				}
 
-				const materials: MaterialWithId[] = parsedPayload.data.materials.map(
-					(materialWithoutId): MaterialWithId => ({
-						...materialWithoutId,
-						id: crypto.randomUUID(),
-						// TODO: Handle image upload to R2
-						// If materialWithoutId.image contains base64 data:
-						// 1. Upload to R2: await env.R2_BUCKET.put(`images/${id}`, imageData)
-						// 2. Store the R2 URL/key in the material
-					}),
+				// Process materials: generate EBKP and optionally descriptions
+				const materials: MaterialWithId[] = await Promise.all(
+					parsedPayload.data.materials.map(
+						async (materialWithoutId): Promise<MaterialWithId> => {
+							const id = crypto.randomUUID();
+
+							// Auto-generate EBKP classification
+							const ebkp = await generateEBKP(env, materialWithoutId);
+
+							// Auto-generate description if missing
+							const description =
+								materialWithoutId.description ||
+								(await generateDescription(env, materialWithoutId));
+
+							return {
+								...materialWithoutId,
+								id,
+								ebkp,
+								description,
+								// TODO: Handle image upload to R2
+								// If materialWithoutId.image contains base64 data:
+								// 1. Upload to R2: await env.R2_BUCKET.put(`images/${id}`, imageData)
+								// 2. Store the R2 URL/key in the material
+							};
+						},
+					),
 				);
 
 				await addMaterialsToVectorStore(env, materials);
@@ -152,6 +171,121 @@ export const service: Service = {
 					},
 					{ status: 200 },
 				);
+			}
+			case "POST /import-inventory": {
+				try {
+					const contentType = request.headers.get("content-type") || "";
+
+					if (!contentType.includes("multipart/form-data")) {
+						return Response.json(
+							{
+								error: true,
+								message: "Request must be multipart/form-data with a file",
+							},
+							{ status: 400 },
+						);
+					}
+
+					// Parse form data
+					const formData = await request.formData();
+					const file = formData.get("file") as File | null;
+
+					if (!file) {
+						return Response.json(
+							{
+								error: true,
+								message:
+									"No file provided. Include a 'file' field in the form data.",
+							},
+							{ status: 400 },
+						);
+					}
+
+					// Validate file type
+					const fileName = file.name.toLowerCase();
+					const validExtensions = [
+						".xlsx",
+						".xls",
+						".pdf",
+						".docx",
+						".txt",
+						".csv",
+					];
+					const hasValidExtension = validExtensions.some((ext) =>
+						fileName.endsWith(ext),
+					);
+
+					if (!hasValidExtension) {
+						return Response.json(
+							{
+								error: true,
+								message: `Unsupported file type. Supported formats: ${validExtensions.join(", ")}`,
+							},
+							{ status: 400 },
+						);
+					}
+
+					// Read file content
+					const fileBuffer = await file.arrayBuffer();
+					const fileText = await fileToText(fileBuffer, file.name);
+
+					// Parse materials from file using AI
+					const parsedMaterials = await parseInventoryFile(
+						env,
+						fileText,
+						file.name,
+					);
+
+					if (parsedMaterials.length === 0) {
+						return Response.json(
+							{
+								error: true,
+								message: "No materials found in the file",
+							},
+							{ status: 400 },
+						);
+					}
+
+					// Convert to MaterialWithId and store
+					const materials: MaterialWithId[] = parsedMaterials.map((mat) => ({
+						...mat,
+						id: crypto.randomUUID(),
+					}));
+
+					// Add to vector store
+					await addMaterialsToVectorStore(env, materials);
+
+					// Store in KV
+					const kvPutPromises: Promise<void>[] = materials.map((material) =>
+						env.DATA_KV.put(
+							`${MATERIALS_KV_PREFIX}/${material.id}`,
+							JSON.stringify(material),
+						),
+					);
+
+					await Promise.all(kvPutPromises);
+
+					return Response.json(
+						{
+							error: false,
+							message: "Inventory imported successfully",
+							count: materials.length,
+						},
+						{ status: 200 },
+					);
+				} catch (error) {
+					console.error("Import inventory error:", error);
+					return Response.json(
+						{
+							error: true,
+							message:
+								error instanceof Error
+									? error.message
+									: "Failed to import inventory",
+						},
+						{ status: 500 },
+					);
+				}
 			}
 		}
 	},
