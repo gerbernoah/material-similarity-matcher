@@ -242,6 +242,7 @@ export const service: Service = {
 						constraints: parsedPayload.data.constraints,
 						location: parsedPayload.data.location,
 						availableTime: parsedPayload.data.availableTime,
+						weights: parsedPayload.data.weights,
 					},
 				);
 

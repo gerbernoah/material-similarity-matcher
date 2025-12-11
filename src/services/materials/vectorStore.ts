@@ -1,7 +1,6 @@
 import { materialsToFieldEmbeddings } from "./util/embedding";
 import {
 	availabilityScore,
-	combinedScore,
 	distance,
 	isWithinRadius,
 	lowerIsBetterScore,
@@ -22,100 +21,34 @@ import type {
 // Minimum score required for hard constraints (80%)
 const HARD_CONSTRAINT_MIN_SCORE = 0.8;
 
-// Default weights for scoring
-const DEFAULT_WEIGHTS: Weights = {
-	w_name: 0.2,
-	w_desc: 0.2,
-	w_price: 0.15,
-	w_quality: 0.15,
-	w_location: 0.1,
-	w_availability: 0.1,
-	w_size: 0.1,
-};
-
 /**
- * Detect which fields the user actually provided in their search query.
- * Returns true only if the field has meaningful data (not defaults/empty).
+ * Convert weights from 0-100 range to 0-1 range for internal calculations
  */
-function isFieldProvided(material: MaterialWithoutId): {
-	hasName: boolean;
-	hasDescription: boolean;
-	hasPrice: boolean;
-	hasQuality: boolean;
-	hasLocation: boolean;
-	hasAvailability: boolean;
-	hasSize: boolean;
-} {
+function normalizeWeights(weights: Weights): Weights {
 	return {
-		hasName: !!material.name && material.name.trim().length > 0,
-		hasDescription:
-			!!material.description && material.description.trim().length > 0,
-		hasPrice:
-			material.price !== undefined &&
-			material.price !== null &&
-			material.price > 0,
-		hasQuality:
-			material.quality !== undefined &&
-			material.quality !== null &&
-			material.quality >= 0.5, // Valid quality is 0.5-1.0, treat < 0.5 as not provided
-		hasLocation:
-			!!material.location &&
-			(material.location.latitude !== 0 || material.location.longitude !== 0) &&
-			// Check if it's a meaningful location (not just default/placeholder)
-			Math.abs(material.location.latitude) > 0.0001 &&
-			Math.abs(material.location.longitude) > 0.0001,
-		hasAvailability:
-			!!material.availableTime &&
-			(!!material.availableTime.from || !!material.availableTime.to),
-		hasSize:
-			!!material.size &&
-			(!!material.size.width ||
-				!!material.size.height ||
-				!!material.size.depth),
+		w_name: weights.w_name / 100,
+		w_desc: weights.w_desc / 100,
+		w_price: weights.w_price / 100,
+		w_quality: weights.w_quality / 100,
+		w_location: weights.w_location / 100,
+		w_availability: weights.w_availability / 100,
+		w_size: weights.w_size / 100,
 	};
 }
 
 /**
- * Calculate normalized weights based on which fields were actually provided.
- * Only active fields get non-zero weights, and they sum to 1.0.
+ * Convert weights from 0-1 range to 0-100 range for response
  */
-function calculateActiveWeights(material: MaterialWithoutId): Weights {
-	const provided = isFieldProvided(material);
-	const baseWeights = { ...DEFAULT_WEIGHTS };
-
-	// Zero out weights for unprovided fields
-	const activeWeights: Weights = {
-		w_name: provided.hasName ? baseWeights.w_name : 0,
-		w_desc: provided.hasDescription ? baseWeights.w_desc : 0,
-		w_price: provided.hasPrice ? baseWeights.w_price : 0,
-		w_quality: provided.hasQuality ? baseWeights.w_quality : 0,
-		w_location: provided.hasLocation ? baseWeights.w_location : 0,
-		w_availability: provided.hasAvailability ? baseWeights.w_availability : 0,
-		w_size: provided.hasSize ? baseWeights.w_size : 0,
+function denormalizeWeights(weights: Weights): Weights {
+	return {
+		w_name: Math.round(weights.w_name * 100),
+		w_desc: Math.round(weights.w_desc * 100),
+		w_price: Math.round(weights.w_price * 100),
+		w_quality: Math.round(weights.w_quality * 100),
+		w_location: Math.round(weights.w_location * 100),
+		w_availability: Math.round(weights.w_availability * 100),
+		w_size: Math.round(weights.w_size * 100),
 	};
-
-	// Calculate sum of active weights
-	const totalWeight =
-		activeWeights.w_name +
-		activeWeights.w_desc +
-		activeWeights.w_price +
-		activeWeights.w_quality +
-		activeWeights.w_location +
-		activeWeights.w_availability +
-		activeWeights.w_size;
-
-	// Normalize to sum to 1.0 if we have any active fields
-	if (totalWeight > 0) {
-		activeWeights.w_name /= totalWeight;
-		activeWeights.w_desc /= totalWeight;
-		activeWeights.w_price /= totalWeight;
-		activeWeights.w_quality /= totalWeight;
-		activeWeights.w_location /= totalWeight;
-		activeWeights.w_availability /= totalWeight;
-		activeWeights.w_size /= totalWeight;
-	}
-
-	return activeWeights;
 }
 
 /**
@@ -180,17 +113,38 @@ export type RetrievalOptions = {
 	constraints?: SearchConstraints;
 	location?: LocationSearch;
 	availableTime?: AvailableTimeRange;
+	weights: Weights; // Required weights from request
 };
 
 export async function retrieveSimilarMaterials(
 	env: Env,
 	topK: number,
 	material: MaterialWithoutId,
-	options?: RetrievalOptions,
+	options: RetrievalOptions,
 ): Promise<RetrievalResult> {
-	// Calculate active weights based on which fields user actually provided
-	const weights = calculateActiveWeights(material);
-	const provided = isFieldProvided(material);
+	// Normalize weights from 0-100 to 0-1 range for internal calculations
+	// Force w_name to 0 as name is for matching, not weighted scoring
+	const normalizedWeights = normalizeWeights(options.weights);
+	normalizedWeights.w_name = 0;
+
+	// Renormalize weights excluding w_name to maintain sum of 1.0
+	const totalWeightWithoutName =
+		normalizedWeights.w_desc +
+		normalizedWeights.w_price +
+		normalizedWeights.w_quality +
+		normalizedWeights.w_location +
+		normalizedWeights.w_availability +
+		normalizedWeights.w_size;
+
+	if (totalWeightWithoutName > 0) {
+		const scale = 1.0 / totalWeightWithoutName;
+		normalizedWeights.w_desc *= scale;
+		normalizedWeights.w_price *= scale;
+		normalizedWeights.w_quality *= scale;
+		normalizedWeights.w_location *= scale;
+		normalizedWeights.w_availability *= scale;
+		normalizedWeights.w_size *= scale;
+	}
 
 	const queryEmbeddings = await materialsToFieldEmbeddings(env, [material]);
 	const queryEmb = queryEmbeddings[0];
@@ -266,32 +220,24 @@ export async function retrieveSimilarMaterials(
 			if (!overlaps) continue;
 		}
 
-		// Calculate individual scores ONLY for fields that were provided
-		const s_price = provided.hasPrice
-			? lowerIsBetterScore(material?.price, metadata?.price)
-			: undefined;
-		const s_quality = provided.hasQuality
-			? lowerIsBetterScore(metadata?.quality, material?.quality)
-			: undefined;
-		const s_location = provided.hasLocation
-			? distance(material?.location, metadata?.location)
-			: undefined;
-		const s_availability = provided.hasAvailability
-			? availabilityScore(material?.availableTime, metadata?.availableTime)
-			: undefined;
-		const s_size = provided.hasSize
-			? sizeScore(material?.size, metadata?.size)
-			: undefined;
+		// Calculate individual scores for all fields (0-1 range, before weighting)
+		const s_price = lowerIsBetterScore(material?.price, metadata?.price) ?? 0;
+		const s_quality =
+			lowerIsBetterScore(metadata?.quality, material?.quality) ?? 0;
+		const s_location = distance(material?.location, metadata?.location) ?? 0;
+		const s_availability =
+			availabilityScore(material?.availableTime, metadata?.availableTime) ?? 0;
+		const s_size = sizeScore(material?.size, metadata?.size) ?? 0;
 
 		// Build score breakdown (individual scores before weighting)
 		const scoreBreakdown: ScoreBreakdown = {
 			name: scores.nameScore,
 			description: scores.descScore,
-			price: s_price ?? 0,
-			quality: s_quality ?? 0,
-			location: s_location ?? 0,
-			availability: s_availability ?? 0,
-			size: s_size ?? 0,
+			price: s_price,
+			quality: s_quality,
+			location: s_location,
+			availability: s_availability,
+			size: s_size,
 		};
 
 		// Filter out materials that don't pass hard constraints (< 80% match)
@@ -299,33 +245,17 @@ export async function retrieveSimilarMaterials(
 			continue;
 		}
 
-		// Calculate combined score using weights - only include provided fields
-		const scoreComponents = [
-			{ score: scores.nameScore, weight: weights.w_name },
-			{ score: scores.descScore, weight: weights.w_desc },
-		];
-
-		// Only add scores for fields that were actually provided
-		if (provided.hasPrice && s_price !== undefined) {
-			scoreComponents.push({ score: s_price, weight: weights.w_price });
-		}
-		if (provided.hasQuality && s_quality !== undefined) {
-			scoreComponents.push({ score: s_quality, weight: weights.w_quality });
-		}
-		if (provided.hasLocation && s_location !== undefined) {
-			scoreComponents.push({ score: s_location, weight: weights.w_location });
-		}
-		if (provided.hasAvailability && s_availability !== undefined) {
-			scoreComponents.push({
-				score: s_availability,
-				weight: weights.w_availability,
-			});
-		}
-		if (provided.hasSize && s_size !== undefined) {
-			scoreComponents.push({ score: s_size, weight: weights.w_size });
-		}
-
-		const s_combined = combinedScore(scoreComponents);
+		// Calculate combined score using provided weights
+		// Formula: (name × w_name + desc × w_desc + ... ) / 100
+		// Since w_name is always 0, it doesn't contribute
+		const s_combined =
+			scores.nameScore * normalizedWeights.w_name +
+			scores.descScore * normalizedWeights.w_desc +
+			s_price * normalizedWeights.w_price +
+			s_quality * normalizedWeights.w_quality +
+			s_location * normalizedWeights.w_location +
+			s_availability * normalizedWeights.w_availability +
+			s_size * normalizedWeights.w_size;
 
 		queryMatches.push({
 			materialId,
@@ -338,52 +268,10 @@ export async function retrieveSimilarMaterials(
 	queryMatches.sort((a, b) => b.score - a.score);
 	const topMatches = queryMatches.slice(0, topK);
 
-	// Recalculate weights based on which fields actually had scores across all results
-	// This handles cases where user provides a field but no stored materials have that data
-	const hasAnyScore = {
-		name: topMatches.some((m) => m.scoreBreakdown.name > 0),
-		description: topMatches.some((m) => m.scoreBreakdown.description > 0),
-		price: topMatches.some((m) => m.scoreBreakdown.price > 0),
-		quality: topMatches.some((m) => m.scoreBreakdown.quality > 0),
-		location: topMatches.some((m) => m.scoreBreakdown.location > 0),
-		availability: topMatches.some((m) => m.scoreBreakdown.availability > 0),
-		size: topMatches.some((m) => m.scoreBreakdown.size > 0),
-	};
-
-	// Adjust weights: zero out fields that had no scores
-	const adjustedWeights: Weights = {
-		w_name: hasAnyScore.name ? weights.w_name : 0,
-		w_desc: hasAnyScore.description ? weights.w_desc : 0,
-		w_price: hasAnyScore.price ? weights.w_price : 0,
-		w_quality: hasAnyScore.quality ? weights.w_quality : 0,
-		w_location: hasAnyScore.location ? weights.w_location : 0,
-		w_availability: hasAnyScore.availability ? weights.w_availability : 0,
-		w_size: hasAnyScore.size ? weights.w_size : 0,
-	};
-
-	// Renormalize to sum to 1.0
-	const totalAdjustedWeight =
-		adjustedWeights.w_name +
-		adjustedWeights.w_desc +
-		adjustedWeights.w_price +
-		adjustedWeights.w_quality +
-		adjustedWeights.w_location +
-		adjustedWeights.w_availability +
-		adjustedWeights.w_size;
-
-	if (totalAdjustedWeight > 0) {
-		adjustedWeights.w_name /= totalAdjustedWeight;
-		adjustedWeights.w_desc /= totalAdjustedWeight;
-		adjustedWeights.w_price /= totalAdjustedWeight;
-		adjustedWeights.w_quality /= totalAdjustedWeight;
-		adjustedWeights.w_location /= totalAdjustedWeight;
-		adjustedWeights.w_availability /= totalAdjustedWeight;
-		adjustedWeights.w_size /= totalAdjustedWeight;
-	}
-
+	// Return the weights that were used (in 0-1 range)
 	return {
 		matches: topMatches,
-		weights: adjustedWeights,
+		weights: normalizedWeights,
 	};
 }
 

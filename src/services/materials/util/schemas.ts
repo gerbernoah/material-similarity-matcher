@@ -35,7 +35,7 @@ export const materialSchema = z.object({
 	name: z.string(),
 	description: z.string().optional(), // Now optional, may be auto-generated
 	price: z.number().min(0).optional(), // Now optional
-	quality: z.number().min(0).max(1).optional(), // Range: 0 (very bad) to 1.0 (new), optional for imports
+	quality: z.number().min(0).max(1).default(0.5), // Range: 0 (very bad) to 1.0 (new), default 0.5
 	quantity: z.number().positive().optional(), // New field
 	image: z.string().optional(), // URL to material image (R2)
 	size: sizeSchema.optional(),
@@ -70,13 +70,13 @@ export const materialWithScore = materialWithIdSchema.extend({
 });
 
 export const weightsSchema = z.object({
-	w_name: z.number().min(0).max(1),
-	w_desc: z.number().min(0).max(1),
-	w_price: z.number().min(0).max(1),
-	w_quality: z.number().min(0).max(1),
-	w_location: z.number().min(0).max(1), // Split from w_position
-	w_availability: z.number().min(0).max(1), // Split from w_position
-	w_size: z.number().min(0).max(1),
+	w_name: z.number().min(0).max(100),
+	w_desc: z.number().min(0).max(100),
+	w_price: z.number().min(0).max(100),
+	w_quality: z.number().min(0).max(100),
+	w_location: z.number().min(0).max(100), // Split from w_position
+	w_availability: z.number().min(0).max(100), // Split from w_position
+	w_size: z.number().min(0).max(100),
 });
 
 // ============================================
@@ -115,9 +115,12 @@ export const addMaterialsRequestSchema = z.object({
 });
 
 export const retrieveSimilarMaterialsRequestSchema = z.object({
-	material: materialWithoutIdSchema.omit({ image: true }),
+	material: materialWithoutIdSchema.omit({ image: true }).extend({
+		quality: z.number().min(0).max(1).default(0.5), // Override to add default
+	}),
 	topK: z.number().min(1).max(10).default(5),
 	constraints: searchConstraintsSchema.optional(),
 	location: locationSearchSchema.optional(),
 	availableTime: availableTimeRangeSchema.optional(),
+	weights: weightsSchema,
 });
