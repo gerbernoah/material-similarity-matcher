@@ -35,7 +35,7 @@ export const materialSchema = z.object({
 	name: z.string(),
 	description: z.string().optional(), // Now optional, may be auto-generated
 	price: z.number().min(0).optional(), // Now optional
-	quality: z.number().min(0.5).max(1).optional(), // Updated range: 0.5-1.0 only, optional for imports
+	quality: z.number().min(0).max(1).optional(), // Range: 0 (very bad) to 1.0 (new), optional for imports
 	quantity: z.number().positive().optional(), // New field
 	image: z.string().optional(), // URL to material image (R2)
 	size: sizeSchema.optional(),

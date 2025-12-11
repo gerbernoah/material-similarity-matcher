@@ -2,7 +2,11 @@ import type { ZodSafeParseError } from "zod";
 import type { Service } from "..";
 import { ACCOUNT_KV_PREFIX, type AccountKV, authenticateToken } from "../auth";
 import { generateDescription, generateEBKP } from "./util/aiGeneration";
-import { fileToText, parseInventoryFile } from "./util/fileParser";
+import {
+	fileToText,
+	parseCSVFile,
+	parseInventoryFile,
+} from "./util/fileParser";
 import {
 	addMaterialsRequestSchema,
 	retrieveSimilarMaterialsRequestSchema,
@@ -111,6 +115,115 @@ export const service: Service = {
 					},
 					{ status: 200 },
 				);
+			}
+			case "POST /import": {
+				try {
+					const contentType = request.headers.get("content-type") || "";
+
+					if (!contentType.includes("multipart/form-data")) {
+						return Response.json(
+							{
+								error: true,
+								message: "Request must be multipart/form-data with a file",
+							},
+							{ status: 400 },
+						);
+					}
+
+					// Parse form data
+					const formData = await request.formData();
+					const file = formData.get("file") as File | null;
+
+					if (!file) {
+						return Response.json(
+							{
+								error: true,
+								message: "No file provided",
+							},
+							{ status: 400 },
+						);
+					}
+
+					// Validate file type (CSV only)
+					const fileName = file.name.toLowerCase();
+					if (!fileName.endsWith(".csv")) {
+						return Response.json(
+							{
+								error: true,
+								message: "Only CSV files are supported",
+							},
+							{ status: 400 },
+						);
+					}
+
+					// Validate file size (10MB max for CSV)
+					const maxSize = 10 * 1024 * 1024; // 10MB
+					if (file.size > maxSize) {
+						return Response.json(
+							{
+								error: true,
+								message: "File size exceeds 10MB limit",
+							},
+							{ status: 400 },
+						);
+					}
+
+					// Read CSV content
+					const fileBuffer = await file.arrayBuffer();
+					const csvContent = new TextDecoder().decode(fileBuffer);
+
+					// Parse materials from CSV using AI
+					const parsedMaterials = await parseCSVFile(env, csvContent);
+
+					if (parsedMaterials.length === 0) {
+						return Response.json(
+							{
+								count: 0,
+								message: "No materials found in the CSV file",
+							},
+							{ status: 200 },
+						);
+					}
+
+					// Convert to MaterialWithId and store
+					const materials: MaterialWithId[] = parsedMaterials.map((mat) => ({
+						...mat,
+						id: crypto.randomUUID(),
+					}));
+
+					// Add to vector store
+					await addMaterialsToVectorStore(env, materials);
+
+					// Store in KV
+					const kvPutPromises: Promise<void>[] = materials.map((material) =>
+						env.DATA_KV.put(
+							`${MATERIALS_KV_PREFIX}/${material.id}`,
+							JSON.stringify(material),
+						),
+					);
+
+					await Promise.all(kvPutPromises);
+
+					return Response.json(
+						{
+							count: materials.length,
+							message: `Successfully imported ${materials.length} materials`,
+						},
+						{ status: 200 },
+					);
+				} catch (error) {
+					console.error("CSV import error:", error);
+					return Response.json(
+						{
+							error: true,
+							message:
+								error instanceof Error
+									? `Failed to parse document: ${error.message}`
+									: "Failed to import CSV",
+						},
+						{ status: 500 },
+					);
+				}
 			}
 			case "POST /retrieve": {
 				const payload = await request.json<RetrieveSimilarMaterialsRequest>();
