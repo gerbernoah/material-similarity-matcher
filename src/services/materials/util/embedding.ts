@@ -41,7 +41,7 @@ async function generateEmbeddings(
 		},
 		{
 			gateway: {
-				id: "material-similarity-embedding",
+				id: "material-hub",
 			},
 		},
 	);

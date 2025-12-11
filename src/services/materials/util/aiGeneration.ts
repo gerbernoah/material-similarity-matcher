@@ -33,19 +33,27 @@ Provide the EBKP classification in the following JSON format only, no additional
 }`;
 
 	try {
-		const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
-			messages: [
-				{
-					role: "system",
-					content:
-						"You are an expert in Swiss EBKP construction classification. Respond only with valid JSON.",
+		const response = await env.AI.run(
+			"@cf/meta/llama-3.1-8b-instruct-fp8",
+			{
+				messages: [
+					{
+						role: "system",
+						content:
+							"You are an expert in Swiss EBKP construction classification. Respond only with valid JSON.",
+					},
+					{
+						role: "user",
+						content: prompt,
+					},
+				],
+			},
+			{
+				gateway: {
+					id: "material-hub",
 				},
-				{
-					role: "user",
-					content: prompt,
-				},
-			],
-		});
+			},
+		);
 
 		if (!("response" in response) || typeof response.response !== "string") {
 			throw new Error("Invalid AI response format");
@@ -96,19 +104,27 @@ ${material.quantity !== undefined ? `Quantity Available: ${material.quantity}` :
 Provide only the description text, no additional formatting or explanations.`;
 
 	try {
-		const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
-			messages: [
-				{
-					role: "system",
-					content:
-						"You are a professional construction materials expert. Generate concise, factual descriptions.",
+		const response = await env.AI.run(
+			"@cf/meta/llama-3.1-8b-instruct-fp8",
+			{
+				messages: [
+					{
+						role: "system",
+						content:
+							"You are a professional construction materials expert. Generate concise, factual descriptions.",
+					},
+					{
+						role: "user",
+						content: prompt,
+					},
+				],
+			},
+			{
+				gateway: {
+					id: "material-hub",
 				},
-				{
-					role: "user",
-					content: prompt,
-				},
-			],
-		});
+			},
+		);
 
 		if (!("response" in response) || typeof response.response !== "string") {
 			throw new Error("Invalid AI response format");

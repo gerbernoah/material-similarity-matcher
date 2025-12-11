@@ -50,19 +50,28 @@ Return ONLY a JSON array of materials, no additional text:
 ]`;
 
 	try {
-		const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
-			messages: [
-				{
-					role: "system",
-					content:
-						"You are an expert at extracting structured data from documents. Respond only with valid JSON arrays.",
+		const response = await env.AI.run(
+			"@cf/meta/llama-3.1-8b-instruct-fp8",
+			{
+				messages: [
+					{
+						role: "system",
+						content:
+							"You are an expert at extracting structured data from documents. Respond only with valid JSON arrays.",
+					},
+					{
+						role: "user",
+						content: prompt,
+					},
+				],
+				max_tokens: 4096,
+			},
+			{
+				gateway: {
+					id: "material-hub",
 				},
-				{
-					role: "user",
-					content: prompt,
-				},
-			],
-		});
+			},
+		);
 
 		if (!("response" in response) || typeof response.response !== "string") {
 			throw new Error("Invalid AI response format");
@@ -107,7 +116,7 @@ Return ONLY a JSON array of materials, no additional text:
 						matObj.quality >= 0 &&
 						matObj.quality <= 1.0
 							? matObj.quality
-							: undefined,
+							: 1,
 					quantity:
 						typeof matObj.quantity === "number" && matObj.quantity > 0
 							? matObj.quantity
@@ -225,20 +234,28 @@ IMPORTANT: Return ONLY a JSON array with no other text. Example format:
 If no materials found, return: []`;
 
 	try {
-		const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
-			messages: [
-				{
-					role: "system",
-					content:
-						"You are a data extraction assistant. You MUST respond with ONLY valid JSON arrays. Never include explanatory text, never start with phrases like 'I don't see' or 'Here is'. Only output JSON.",
+		const response = await env.AI.run(
+			"@cf/meta/llama-3.1-8b-instruct-fp8",
+			{
+				messages: [
+					{
+						role: "system",
+						content:
+							"You are a data extraction assistant. You MUST respond with ONLY valid JSON arrays. Never include explanatory text, never start with phrases like 'I don't see' or 'Here is'. Only output JSON.",
+					},
+					{
+						role: "user",
+						content: prompt,
+					},
+				],
+				max_tokens: 4096,
+			},
+			{
+				gateway: {
+					id: "material-hub",
 				},
-				{
-					role: "user",
-					content: prompt,
-				},
-			],
-			max_tokens: 4096,
-		});
+			},
+		);
 
 		if (!("response" in response) || typeof response.response !== "string") {
 			throw new Error("Invalid AI response format");
